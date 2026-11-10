@@ -164,6 +164,20 @@ namespace LogicReinc.BlendFarm.Client
         public event Action<RenderNode, string> OnLog;
 
         /// <summary>
+        /// Event whenever the server reported a new state of its render queue
+        /// </summary>
+        public event Action<RenderNode> OnQueueChanged;
+
+        /// <summary>
+        /// Who is rendering and who is waiting on the server, as last reported by it (read only)
+        /// </summary>
+        public List<QueueEntryModel> QueueEntries { get; private set; } = new List<QueueEntryModel>();
+        /// <summary>
+        /// Where this client is in the server's queue: -1 not in it, 0 rendering, 1 and up waiting
+        /// </summary>
+        public int QueuePosition { get; private set; } = -1;
+
+        /// <summary>
         /// Whenever a relevant property changed
         /// </summary>
         public event PropertyChangedEventHandler PropertyChanged;
@@ -175,6 +189,9 @@ namespace LogicReinc.BlendFarm.Client
                 TriggerPropChange(nameof(Connected));
             OnDisconnected += (n) =>
             {
+                QueueEntries = new List<QueueEntryModel>();
+                QueuePosition = -1;
+                OnQueueChanged?.Invoke(this);
                 foreach (string k in SyncedMap.Keys.ToList())
                     UpdateSyncedStatus(k, false);
                 TriggerPropChange(nameof(Connected));
@@ -349,6 +366,12 @@ namespace LogicReinc.BlendFarm.Client
             {
                 UpdateActivity(packAct.Activity, packAct.Progress);
             }
+            if(p is QueueStatusResponse packQueue)
+            {
+                QueueEntries = packQueue.Entries ?? new List<QueueEntryModel>();
+                QueuePosition = packQueue.YourPosition;
+                OnQueueChanged?.Invoke(this);
+            }
             if(p is ConsoleActivityResponse packConsole)
             {
                 _currentLog.AppendLine(packConsole.Output);
@@ -405,7 +428,7 @@ namespace LogicReinc.BlendFarm.Client
                 UpdatePreparedStatus(true);
             }
             else
-                UpdateException($"Failed Version {version}");
+                UpdateException(string.IsNullOrEmpty(resp?.Message) ? $"Failed Version {version}" : resp.Message);
 
             UpdateActivity("");
 
@@ -720,6 +743,17 @@ namespace LogicReinc.BlendFarm.Client
         }
 
 
+        /// <summary>
+        /// Blender versions the server has installed or can download
+        /// </summary>
+        public async Task<BlenderVersionsResponse> GetBlenderVersions()
+        {
+            if (Client == null)
+                throw new InvalidOperationException("Client not connected");
+            using (CancellationTokenSource cancel = new CancellationTokenSource(8000))
+                return await Client.Send<BlenderVersionsResponse>(new BlenderVersionsRequest(), cancel.Token);
+        }
+
         public async Task<bool> IsBusy()
         {
             return (await Client.Send<IsBusyResponse>(new IsBusyRequest(), CancellationToken.None))?.IsBusy ?? false;
@@ -783,6 +817,7 @@ namespace LogicReinc.BlendFarm.Client
         //PropertyChanges (generally for UI)
         public void UpdateActivity(string activity, double progress = -1)
         {
+            activity = Loc.T(activity);
             if (Activity != activity)
             {
                 ActivityProgress = -1;
@@ -819,6 +854,7 @@ namespace LogicReinc.BlendFarm.Client
         }
         public void UpdateException(string excp)
         {
+            excp = Loc.T(excp);
             if (Exception != excp)
             {
                 Exception = excp;

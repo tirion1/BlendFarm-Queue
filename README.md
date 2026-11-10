@@ -1,4 +1,6 @@
 # **BlendFarm**
+> **Queue Edition** - this is a fork of [LogicReinc.BlendFarm](https://github.com/LogicReinc/LogicReinc.BlendFarm) that adds a render queue shared by all connected computers (first come, first served), a queue view where the server computer can move a job to the front, a Blender version list taken from the servers (works offline), and an optional Chinese UI. It is not compatible with the original (protocol 8). See [README-队列版.md](README-%E9%98%9F%E5%88%97%E7%89%88.md) (中文说明). All credit for BlendFarm itself goes to LogicReinc; licensed under GPL-3.0 as the original.
+
 A open-source, cross-platform, stand-alone, Network Renderer for Blender
 ---
 When I was trying to build a render server I was suprised most network renderers out there for Blender are either outdated, obsolete or require very specific environments to work properly. Thus, I spend the last months writing and testing a stand-alone network renderer that requires barely any setup and should work with most if not all recent versions of Blender. And should even work with future releases. 

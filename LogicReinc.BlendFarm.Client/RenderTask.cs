@@ -98,6 +98,7 @@ namespace LogicReinc.BlendFarm.Shared
 
             List<RenderNode> pool = Nodes.Where(x => x.Connected).ToList();
             List<RenderNode> validNodes = new List<RenderNode>();
+            List<RenderNode> busyNodes = new List<RenderNode>();
 
             await Task.WhenAll(pool.Select(async x =>
             {
@@ -111,13 +112,21 @@ namespace LogicReinc.BlendFarm.Shared
 
                 bool isBusy = await x.IsBusy();
                 if (isBusy)
+                {
+                    lock (busyNodes)
+                        busyNodes.Add(x);
                     return;
+                }
 
                 lock (validNodes)
                 {
                     validNodes.Add(x);
                 }
             }));
+
+            //A busy node queues the work until its turn, so only fall back to those when nothing is idle
+            if (validNodes.Count == 0)
+                validNodes.AddRange(busyNodes);
 
             if (validNodes.Count == 0)
                 throw new InvalidOperationException("No ready nodes available");

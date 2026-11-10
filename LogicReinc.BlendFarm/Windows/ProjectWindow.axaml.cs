@@ -92,11 +92,7 @@ This may have to do with the port being in use. Note that to discover other pcs 
 (TCP: {ServerSettings.Instance.Port}, UDP: {ServerSettings.Instance.BroadcastPort})");
                     });
                 };
-                LocalServer.OnDiscoveredServer += (name, address, port) =>
-                {
-                    if (_manager != null)
-                        _manager.TryAddDiscoveryNode(name, address, port);
-                };
+                LocalServer.OnDiscoveredServer += (name, address, port) => ServerHub.AddDiscovered(name, address, port);
                 LocalServer.Start();
                 Closed += (a, b) =>
                 {
@@ -104,6 +100,9 @@ This may have to do with the port being in use. Note that to discover other pcs 
                         LocalServer.Stop();
                 };
             }
+
+            //Known servers are connected right away, so their queue and versions show without opening a project
+            ServerHub.Start();
 
             this.InitializeComponent();
 
@@ -143,12 +142,13 @@ This may have to do with the port being in use. Note that to discover other pcs 
         private void InitializeComponent()
         {
             AvaloniaXamlLoader.Load(this);
-            Width = 600;
+            //Project loader on the left, the node selection and the queue (collapsed) next to it
+            Width = 980;
             Height = 700;
             MinHeight = 700;
-            MinWidth = 600;
+            MinWidth = 980;
             MaxHeight = 700;
-            MaxWidth = 600;
+            MaxWidth = 980;
 
             fileSelection = this.FindControl<TextBox>("fileSelect");
 
@@ -179,7 +179,28 @@ This may have to do with the port being in use. Note that to discover other pcs 
             connectLocal.Checked += (a, b) => importSettings.IsEnabled = true;
 
             comboVersions = this.FindControl<ComboBox>("versionSelect");
+            versionSource = this.FindControl<ComboBox>("versionSource");
+            versionSource.Items = new[]
+            {
+                Loc.T("From server (installed versions)"),
+                Loc.T("From Blender website (downloads when needed)")
+            };
+            versionSource.SelectedIndex = BlendFarmSettings.Instance.VersionSource == "official" ? 1 : 0;
             ReloadVersions();
+            versionSource.SelectionChanged += (a, b) =>
+            {
+                BlendFarmSettings.Instance.VersionSource = UseOfficial ? "official" : "server";
+                BlendFarmSettings.Instance.Save();
+                ReloadVersions();
+            };
+            ServerHub.SelectedVersion = (comboVersions.SelectedItem as BlenderVersion)?.Name;
+            comboVersions.SelectionChanged += (a, b) => ServerHub.SelectedVersion = (comboVersions.SelectedItem as BlenderVersion)?.Name;
+            ServerHub.VersionsChanged += OnServerVersionsChanged;
+            Closed += (a, b) =>
+            {
+                _closed = true;
+                ServerHub.VersionsChanged -= OnServerVersionsChanged;
+            };
 
             history = this.FindControl<ListBox>("history");
             history.Items = BlendFarmSettings.Instance.History.ToList();
@@ -198,47 +219,96 @@ This may have to do with the port being in use. Note that to discover other pcs 
                 MessageWindow.Show(this, "OSX Rendering", "Rendering using Blender is disabled for OSX due to it not being implemented fully yet. You can however render using other machines in your network. (Local render node will not be available)");
         }
 
+        private ComboBox versionSource = null;
+        private bool UseOfficial => versionSource?.SelectedIndex == 1;
+
+        /// <summary>
+        /// Loads the Blender versions to pick from. What the servers have installed is known right away; the
+        /// list of the Blender website can take a while, so it is loaded in the background (and not at all offline).
+        /// </summary>
         public void ReloadVersions()
         {
-            try
-            {
-                Console.WriteLine("Fetching versions from cache or remote");
+            ApplyVersions();
+            if (!UseOfficial)
+                return;
 
-                string versionCache = SystemInfo.RelativeToApplicationDirectory("VersionCache");
-                if (!new FileInfo(versionCache).FullName.ToLower().StartsWith("c:\\windows\\system32"))
-                    versions = BlenderVersion.GetBlenderVersions(versionCache, SystemInfo.RelativeToApplicationDirectory("VersionCustom"))
-                        .OrderByDescending(x => x.Name)
-                        .ToList();
-                else
-                    versions = new List<BlenderVersion>()
+            Task.Run(() =>
+            {
+                try
+                {
+                    Console.WriteLine("Fetching versions from cache or remote");
+                    List<BlenderVersion> official = BlenderVersion.GetBlenderVersions(
+                        SystemInfo.RelativeToApplicationDirectory("VersionCache"),
+                        SystemInfo.RelativeToApplicationDirectory("VersionCustom")).ToList();
+                    Dispatcher.UIThread.InvokeAsync(() =>
                     {
-                        new BlenderVersion()
-                        {
-                            Name = "Fake Version"
-                        }
-                    };
-            }
-            catch (Exception ex)
-            {
-                MessageWindow.Show(this, "Exception retrieving versions", 
-                    $"Failed to retrieve versions due to {ex.Message}, this may be due to no internet connection.An internet connection is required to retrieve version info and download Blender installations. Restart application with internet connection for Blender versions..",
-                    600, 250);
-            }
-            comboVersions.Items = versions;
-            int selectedIndex = 0;
-            if (!string.IsNullOrEmpty(BlendFarmSettings.Instance.LastVersion))
-            {
-                BlenderVersion lastVersion = versions.FirstOrDefault(x => x.Name == BlendFarmSettings.Instance.LastVersion);
-                if (lastVersion != null)
-                    selectedIndex = versions.IndexOf(lastVersion);
-            }
-            comboVersions.SelectedIndex = selectedIndex;
+                        _baseVersions = official;
+                        ApplyVersions();
+                    });
+                }
+                catch (Exception ex)
+                {
+                    Dispatcher.UIThread.InvokeAsync(() => MessageWindow.Show(this, "Exception retrieving versions",
+                        $"Failed to retrieve versions due to {ex.Message}, this may be due to no internet connection.An internet connection is required to retrieve version info and download Blender installations. Restart application with internet connection for Blender versions..",
+                        600, 250));
+                }
+            });
         }
+
+        private List<BlenderVersion> _baseVersions = new List<BlenderVersion>();
+        private bool _closed = false;
+
+        /// <summary>
+        /// Combines the downloadable versions with the ones installed on this computer and the ones the
+        /// connected servers reported, so nothing has to be added by hand. Keeps the current selection.
+        /// </summary>
+        private void ApplyVersions()
+        {
+            Dictionary<string, BlenderVersion> map = new Dictionary<string, BlenderVersion>();
+            List<string> extra = BlenderVersion.GetInstalledVersions(SystemInfo.RelativeToApplicationDirectory(ServerSettings.Instance.BlenderData));
+            extra.AddRange(BlenderVersion.GetCustomBlenderVersions(SystemInfo.RelativeToApplicationDirectory("VersionCustom")).Select(x => x.Name));
+
+            if (UseOfficial)
+            {
+                //As it always was: the Blender website, a server downloads the version when a task starts
+                foreach (BlenderVersion version in _baseVersions)
+                    map[version.Name] = version;
+            }
+            else
+            {
+                //What the servers have installed, so nothing needs to be downloaded
+                extra.AddRange(BlendFarmSettings.Instance.RemoteVersions ?? new List<string>());
+                extra.AddRange(ServerHub.RemoteVersions);
+            }
+
+            foreach (string name in extra)
+                if (!map.ContainsKey(name))
+                    map[name] = new BlenderVersion() { IsCustom = true, Name = name };
+
+            string selected = (comboVersions.SelectedItem as BlenderVersion)?.Name ?? BlendFarmSettings.Instance.LastVersion;
+            versions = map.Values.OrderByDescending(x => x.Name, Comparer<string>.Create(BlenderVersion.CompareNames)).ToList();
+            comboVersions.Items = versions;
+
+            int index = versions.FindIndex(x => x.Name == selected);
+            comboVersions.SelectedIndex = index >= 0 ? index : (versions.Count > 0 ? 0 : -1);
+        }
+
+        private void OnServerVersionsChanged()
+        {
+            if (!_closed)
+                ApplyVersions();
+        }
+
         public async void ShowCustomWizard()
         {
             await CustomBlenderBuildWizard.Show(this);
             ReloadVersions();
         }
+        public async void SwitchLanguage()
+        {
+            await LanguageSwitcher.Switch(this);
+        }
+
         public async void ShowFileDialog()
         {
             OpenFileDialog dialog = new OpenFileDialog();
@@ -303,6 +373,13 @@ This may have to do with the port being in use. Note that to discover other pcs 
             string file = fileSelection.Text;
             BlenderVersion version = (BlenderVersion)comboVersions.SelectedItem;
 
+            if (version == null)
+            {
+                MessageWindow.Show(this, "No Blender version", "There is no Blender version to render with. Connect a server in the node selection first, or set the version source to the Blender website.");
+                ShowLoadProjectUI(true);
+                return;
+            }
+
             if (!File.Exists(file))
             {
                 MessageWindow.Show(this, "File not found", $"{file} does not exist");
@@ -335,11 +412,9 @@ This may have to do with the port being in use. Note that to discover other pcs 
             //Setup manager
             _manager = new BlendFarmManager(path, version.Name, null, localPath);
 
-            if(!_noServer && !BlendFarmSettings.Instance.PastClients.Any(x=>x.Key == BlendFarmManager.LocalNodeName))
-                _manager.AddNode(BlendFarmManager.LocalNodeName, $"localhost:{LocalServer.ServerPort}", RenderType.CPU, ServerSettings.Instance.BasicSecurityPassword);
-
-            foreach (var pair in BlendFarmSettings.Instance.PastClients.ToList())
-                _manager.AddNode(pair.Key, pair.Value.Address, pair.Value.RenderType, pair.Value.Pass);
+            //The nodes picked in the entry window, with their connections, carry over to the render window
+            ServerHub.SelectedVersion = version.Name;
+            ServerHub.SetManager(_manager);
 
             if (useAssetSync.IsChecked.Value)
             {

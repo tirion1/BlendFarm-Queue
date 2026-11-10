@@ -48,6 +48,22 @@ namespace LogicReinc.BlendFarm
         public Dictionary<string, UIProjectSettings> ProjectSettings { get; set; } = new Dictionary<string, UIProjectSettings>();
 
 
+        /// <summary>
+        /// Interface language, "en" or "zh", null picks one from the system language
+        /// </summary>
+        public string Language { get; set; } = null;
+
+        /// <summary>
+        /// Where the list of Blender versions comes from: "server" (what the servers have installed, the default)
+        /// or "official" (the Blender website, versions are downloaded when a task starts)
+        /// </summary>
+        public string VersionSource { get; set; } = "server";
+
+        /// <summary>
+        /// Blender versions servers reported as installed earlier, so the list is there when they are not
+        /// </summary>
+        public List<string> RemoteVersions { get; set; } = new List<string>();
+
         public bool Option_UseAssetsSync { get; set; }
         public bool Option_ConnectLocal { get; set; }
         public bool Option_ImportSettings { get; set; }
@@ -105,6 +121,12 @@ namespace LogicReinc.BlendFarm
             public RenderType RenderType { get; set; } = RenderType.CPU;
             public double Performance { get; set; }
             public string Pass { get; set; }
+
+            /// <summary>
+            /// The node was connected by the user (and not disconnected again), so it is connected on startup.
+            /// Nodes that were never picked are only listed.
+            /// </summary>
+            public bool AutoConnect { get; set; }
         }
 
         /// <summary>

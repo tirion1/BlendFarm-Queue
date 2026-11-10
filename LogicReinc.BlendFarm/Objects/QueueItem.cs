@@ -27,7 +27,7 @@ namespace LogicReinc.BlendFarm.Objects
 
         public RenderTask Task { get; set; }
 
-        public string State => (!string.IsNullOrEmpty(Exception)) ? Exception : (!Cancelled ? (Task != null ? $"Rendering {Task.Progress * 100: 0.##}%" : "Queued") : "Cancelled");
+        public string State => Loc.T((!string.IsNullOrEmpty(Exception)) ? Exception : (!Cancelled ? (Task != null ? $"Rendering {Task.Progress * 100: 0.##}%" : "Queued") : "Cancelled"));
 
         public string Exception { get; set; }
 

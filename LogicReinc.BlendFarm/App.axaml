@@ -5,6 +5,10 @@
     <Application.Styles>
         <StyleInclude Source="avares://Avalonia.Themes.Default/DefaultTheme.xaml"/>
         <StyleInclude Source="avares://Avalonia.Themes.Default/Accents/BaseLight.xaml"/>
+        <!--Text boxes did not fall back to a font with Chinese characters, file names showed as boxes-->
+        <Style Selector="TextBox">
+            <Setter Property="FontFamily" Value="Microsoft YaHei UI, Segoe UI"/>
+        </Style>
     </Application.Styles>
   <NativeMenu.Menu>
     <NativeMenu>

@@ -87,7 +87,7 @@ namespace LogicReinc.BlendFarm.Windows
         public bool IsQueueing { get; set; } = false;
 
         private int _queueCount = 0;
-        public string QueueName => $"Queue ({_queueCount})";
+        public string QueueName => Loc.T($"Queue ({_queueCount})");
 
         public ObservableCollection<RenderNode> Nodes { get; private set; } = new ObservableCollection<RenderNode>();
         public BlendFarmManager Manager { get; set; } = null;
@@ -195,6 +195,11 @@ namespace LogicReinc.BlendFarm.Windows
 
             Init();
         }
+        public async void SwitchLanguage()
+        {
+            await LanguageSwitcher.Switch(this);
+        }
+
         private void Init()
         {
             OS = SystemInfo.GetOSName();
@@ -215,6 +220,9 @@ namespace LogicReinc.BlendFarm.Windows
             else 
                 Nodes =  _testNodes;
             DataContext = this;
+
+            ServerHub.SyncAll = SyncAll;
+            ServerHub.SelectedVersion = Version?.Name;
 
             this.Closed += (a, b) =>
             {
@@ -262,8 +270,8 @@ namespace LogicReinc.BlendFarm.Windows
             AvaloniaXamlLoader.Load(this);
 
             MinHeight = 600;
-            MinWidth = 500;
-            Width = 1400;
+            MinWidth = 1100;
+            Width = 1500;
             Height = 975;
 
             System.Version version = Assembly.GetExecutingAssembly().GetName().Version;
@@ -393,70 +401,12 @@ namespace LogicReinc.BlendFarm.Windows
             });
         }
 
-        public async void ConnectAll()
-        {
-            try
-            {
-                await Manager.ConnectAndPrepareAll();
-            }
-            catch { }
-        }
         public async Task SyncAll()
         {
             if (!CurrentProject.UseNetworkedPath)
                 await Manager?.Sync(CurrentProject.BlendFile, UseSyncCompression);
             else
                 await Manager?.Sync(CurrentProject.BlendFile, CurrentProject.NetworkPathWindows, CurrentProject.NetworkPathLinux, CurrentProject.NetworkPathMacOS);
-        }
-
-        public void AddNewNode()
-        {
-            if (!string.IsNullOrEmpty(InputClientAddress) && !string.IsNullOrEmpty(InputClientName))
-            {
-                if (BlendFarmSettings.Instance.PastClients.Any(x => x.Key == InputClientName || x.Value.Address == InputClientAddress))
-                {
-                    MessageWindow.Show(this, "Node already exists", "Node already exists, use a different name and address");
-                    return;
-                }
-                if(!Regex.IsMatch(InputClientAddress, "^([a-zA-Z0-9\\.]*?):[0-9][0-9]?[0-9]?[0-9]?[0-9]?$"))
-                {
-                    MessageWindow.Show(this, "Invalid Address", "The address provided seems to be invalid, expected format is {hostname}:{port} or {ip}{port}, eg. 192.168.1.123:15000");
-                    return;
-                }
-
-                Manager.AddNode(InputClientName, InputClientAddress);
-
-                BlendFarmSettings.Instance.PastClients.Add(InputClientName, new BlendFarmSettings.HistoryClient()
-                {
-                    Address = InputClientAddress,
-                    Name = InputClientName,
-                    RenderType = RenderType.CPU
-                });
-                BlendFarmSettings.Instance.Save();
-            }
-            else
-                MessageWindow.Show(this, "No name or address", "A node requires both a name and an address");
-        }
-
-        public void DeleteNode(RenderNode node)
-        {
-            Manager.RemoveNode(node.Name);
-
-            var nodeEntry = BlendFarmSettings.Instance.PastClients.FirstOrDefault(x => x.Key == node.Name).Key;
-            if (nodeEntry != null)
-            {
-                BlendFarmSettings.Instance.PastClients.Remove(nodeEntry);
-                BlendFarmSettings.Instance.Save();
-            }
-        }
-
-        public void TerminalNode(RenderNode node)
-        {
-            DeviceLogWindow.Show(this, node);
-        }
-        public async void ConfigureNode(RenderNode node)
-        {
-            DeviceSettingsWindow.Show(this, node);
         }
 
         public void StartingRender(RenderTask task)

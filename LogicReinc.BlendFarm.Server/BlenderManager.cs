@@ -36,6 +36,11 @@ namespace LogicReinc.BlendFarm.Server
         public bool Busy { get; private set; }
 
         /// <summary>
+        /// Lets clients take turns, shared by every client connected to this server
+        /// </summary>
+        public RenderQueue Queue { get; } = new RenderQueue(TimeSpan.FromSeconds(Math.Max(0, ServerSettings.Instance.QueueLeaseSeconds)));
+
+        /// <summary>
         /// Directory where versions of Blender are saved
         /// </summary>
         public string BlenderData { get; set; }
@@ -65,6 +70,14 @@ namespace LogicReinc.BlendFarm.Server
         /// Returns formatted BlenderData directory path
         /// </summary>
         /// <returns></returns>
+        /// <summary>
+        /// Names of the Blender versions installed on this machine
+        /// </summary>
+        public List<string> GetInstalledVersionNames()
+        {
+            return BlenderVersion.GetInstalledVersions(GetBlenderDataPath());
+        }
+
         public string GetBlenderDataPath()
         {
             return Path.GetFullPath(BlenderData);
@@ -169,15 +182,76 @@ namespace LogicReinc.BlendFarm.Server
         public bool IsVersionAvailable(string version)
         {
             //if (!SystemInfo.IsOS(SystemInfo.OS_MACOS))
-            return Directory.Exists(GetVersionPath(version, SystemInfo.GetOSName()));
+            if (!Directory.Exists(GetVersionPath(version, SystemInfo.GetOSName())))
+                return false;
+
+            //A folder without Blender in it (wrongly extracted) is not a usable version
+            FlattenNestedInstall(version);
+            return !ChecksExecutable() || File.Exists(GetVersionExecutablePath(GetBlenderDataPath(), version));
             //else
             //    return File.Exists(GetVersionPath(version, SystemInfo.GetOSName()) + ".dmg");
         }
+        //The layout of the Blender folder is only known for these, the others are left as they are
+        private static bool ChecksExecutable()
+        {
+            string os = SystemInfo.GetOSName();
+            return os == SystemInfo.OS_WINDOWS64 || os == SystemInfo.OS_LINUX64;
+        }
+
+        /// <summary>
+        /// When Blender was extracted by hand its archive often adds a folder of its own, so it ends up one folder
+        /// deeper than expected (BlenderData\blender-x-windows64\blender-x-windows-x64\blender.exe).
+        /// Moves the contents up one level in that case.
+        /// </summary>
+        private void FlattenNestedInstall(string version)
+        {
+            if (!ChecksExecutable())
+                return;
+
+            try
+            {
+                string dir = GetVersionPath(version, SystemInfo.GetOSName());
+                string executable = GetVersionExecutablePath(GetBlenderDataPath(), version);
+                if (!Directory.Exists(dir) || File.Exists(executable))
+                    return;
+
+                string[] folders = Directory.GetDirectories(dir);
+                if (folders.Length != 1 || Directory.GetFiles(dir).Length > 0)
+                    return;
+
+                string nested = folders[0];
+                if (!File.Exists(Path.Combine(nested, Path.GetRelativePath(dir, executable))))
+                    return;
+
+                Console.WriteLine($"{version} was extracted one folder too deep, moving it up ({nested})");
+                foreach (string entry in Directory.GetFileSystemEntries(nested))
+                {
+                    string target = Path.Combine(dir, Path.GetFileName(entry));
+                    if (Directory.Exists(entry))
+                        Directory.Move(entry, target);
+                    else
+                        File.Move(entry, target);
+                }
+                if (Directory.GetFileSystemEntries(nested).Length == 0)
+                    Directory.Delete(nested);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Could not fix the folder of {version} due to: {ex.Message}");
+            }
+        }
+
         /// <summary>
         /// Attempt to provide a version of Blender
         /// </summary>
-        public bool TryPrepare(string version, Action<string, double> onProgress = null)
+        public bool TryPrepare(string version, Action<string, double> onProgress = null) => TryPrepare(version, out _, onProgress);
+
+        /// <summary>
+        /// Attempt to provide a version of Blender, tells why it did not work
+        /// </summary>
+        public bool TryPrepare(string version, out string error, Action<string, double> onProgress = null)
         {
+            error = null;
             try
             {
                 Prepare(version, onProgress);
@@ -186,6 +260,7 @@ namespace LogicReinc.BlendFarm.Server
             catch(Exception ex)
             {
                 Console.WriteLine("TryPrepare failed due to: " + ex.Message);
+                error = ex.Message;
                 return false;
             }
         }
@@ -195,16 +270,25 @@ namespace LogicReinc.BlendFarm.Server
         /// <param name="version"></param>
         public void Prepare(string version, Action<string, double> onProgress = null)
         {
+            string targetDir = GetVersionPath(version, SystemInfo.GetOSName());
+
+            if (Directory.Exists(targetDir))
+            {
+                FlattenNestedInstall(version);
+                string executable = GetVersionExecutablePath(GetBlenderDataPath(), version);
+                if (ChecksExecutable() && !File.Exists(executable))
+                    throw new InvalidOperationException($"Blender {version} is installed in a folder that has no Blender executable ({executable}). Check where it was extracted.");
+
+                Console.WriteLine($"{version} already present");
+                return;
+            }
+
             BlenderVersion v = BlenderVersion.FindVersion(version, SystemInfo.RelativeToApplicationDirectory("VersionCache"), SystemInfo.RelativeToApplicationDirectory("VersionCustom"));
 
             if (v == null)
                 throw new ArgumentException("Version not found");
 
-            string targetDir = GetVersionPath(version, SystemInfo.GetOSName());
-
-            if (Directory.Exists(targetDir))
-                Console.WriteLine($"{version} already present");
-            else if (v.IsCustom)
+            if (v.IsCustom)
                 throw new ArgumentException("Custom version missing");
             else
                 Download(SystemInfo.GetOSName(), v, onProgress);

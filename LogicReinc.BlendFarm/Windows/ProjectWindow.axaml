@@ -2,7 +2,8 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        mc:Ignorable="d" d:DesignWidth="600" d:DesignHeight="625"
+        xmlns:local="clr-namespace:LogicReinc.BlendFarm.Controls;assembly=LogicReinc.BlendFarm"
+        mc:Ignorable="d" d:DesignWidth="980" d:DesignHeight="700"
         x:Class="LogicReinc.BlendFarm.Windows.ProjectWindow"
         Title="BlendFarm by LogicReinc" Background="#222222">
   <Window.Styles>
@@ -10,7 +11,8 @@
   </Window.Styles>
 
 
-  <StackPanel Margin="20">
+  <Grid ColumnDefinitions="600,380">
+  <StackPanel Grid.Column="0" Margin="20">
     <!--
     <TextBlock Margin="0,20,0,0" TextAlignment="Center" Foreground="#666666" FontSize="20" FontWeight="Bold">
       LogicReinc
@@ -19,11 +21,16 @@
       BlendFarm
     </TextBlock>
     -->
+    <Button HorizontalAlignment="Right" Padding="10,3" BorderThickness="0" Background="#111111" Command="{Binding SwitchLanguage}">中文 / English</Button>
     <Image Source="/Images/header.png" Height="100" />
     <TextBlock TextAlignment="Center">Select your .blend Project</TextBlock>
     <StackPanel HorizontalAlignment="Center" Orientation="Horizontal" Margin="10">
       <TextBox Width="440" FontSize="10" x:Name="fileSelect"></TextBox>
       <Button Width="100" Command="{Binding ShowFileDialog}">Select your file</Button>
+    </StackPanel>
+    <StackPanel HorizontalAlignment="Center" Orientation="Horizontal" Margin="10,10,10,0">
+      <TextBlock VerticalAlignment="Center" Margin="0,0,10,0">Version source:</TextBlock>
+      <ComboBox x:Name="versionSource" Width="330" />
     </StackPanel>
     <StackPanel HorizontalAlignment="Center" Orientation="Horizontal" Margin="10">
       <ComboBox x:Name="versionSelect" HorizontalAlignment="Center" Width="390">
@@ -80,4 +87,6 @@
 		  </Button>
 	  </StackPanel>
   </StackPanel>
+  <local:ServerSidebar Grid.Column="1" />
+  </Grid>
 </Window>

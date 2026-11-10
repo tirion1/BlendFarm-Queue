@@ -366,3 +366,6 @@ Deploy/
 build.sh
 
 packages-microsoft-prod.deb
+
+# Local deployment folder (Blender installs, copies of project files, settings)
+dist/

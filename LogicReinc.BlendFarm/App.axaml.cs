@@ -17,6 +17,7 @@ namespace LogicReinc.BlendFarm
             if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
             {
                 desktop.MainWindow = new ProjectWindow();
+                GuiLocalizer.Start(desktop);
             }
 
             base.OnFrameworkInitializationCompleted();

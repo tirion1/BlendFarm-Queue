@@ -4,6 +4,7 @@ using System.Reflection;
 using Avalonia;
 using Avalonia.Controls.ApplicationLifetimes;
 using LogicReinc.BlendFarm.Server;
+using LogicReinc.BlendFarm.Shared;
 
 namespace LogicReinc.BlendFarm
 {
@@ -29,6 +30,8 @@ namespace LogicReinc.BlendFarm
         {
             Console.WriteLine($"LogicReinc.BlendFarm v{typeof(Program).Assembly.GetName().Version.ToString()}");
             Server.Program.CleanupOldSessions();
+
+            Loc.Language = BlendFarmSettings.Instance.Language ?? Loc.DetectDefault();
 
             Console.WriteLine("Saving current setting states");
             BlendFarmSettings.Instance.Save();

@@ -45,6 +45,12 @@ namespace LogicReinc.BlendFarm.Server
         /// </summary>
         public string BasicSecurityPassword { get; set; } = null;
 
+        /// <summary>
+        /// Seconds a client keeps its place in the render queue after finishing a render, so the next
+        /// frames of the same animation are not interleaved with other clients' jobs
+        /// </summary>
+        public int QueueLeaseSeconds { get; set; } = 15;
+
         #region Boilerplate
         private static ServerSettings _instance = null;
         public static ServerSettings Instance

@@ -53,6 +53,7 @@ namespace LogicReinc.BlendFarm.Server
         private Thread _listenerThread = null;
         private Thread _listenerUDPThread = null;
         private Thread _broadcastThread = null;
+        private Thread _queueThread = null;
 
         private List<RenderServerClientTcp> Clients { get; } = new List<RenderServerClientTcp>();
 
@@ -96,6 +97,7 @@ namespace LogicReinc.BlendFarm.Server
             Active = true;
 
             StartRenderListener();
+            StartQueuePusher();
 
             if (BroadcastPort > 0)
             {
@@ -144,6 +146,34 @@ namespace LogicReinc.BlendFarm.Server
             });
             _listenerThread.Start();
         }
+        /// <summary>
+        /// Keeps every connected client up to date on the render queue
+        /// </summary>
+        private void StartQueuePusher()
+        {
+            _queueThread = new Thread(() =>
+            {
+                while (Active)
+                {
+                    try
+                    {
+                        List<RenderServerClientTcp> clients = null;
+                        lock (Clients)
+                            clients = Clients.ToList();
+                        foreach (RenderServerClientTcp client in clients)
+                        {
+                            try { client.PushQueueStatus(); }
+                            catch { }
+                        }
+                    }
+                    catch { }
+                    Thread.Sleep(1000);
+                }
+            });
+            _queueThread.IsBackground = true;
+            _queueThread.Start();
+        }
+
         /// <summary>
         /// Starts the broadcast listener for discovery
         /// </summary>

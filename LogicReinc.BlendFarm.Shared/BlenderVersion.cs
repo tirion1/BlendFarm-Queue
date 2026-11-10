@@ -25,7 +25,7 @@ namespace LogicReinc.BlendFarm.Shared
 
         private const string VERSIONS_URL = "https://download.blender.org/release/";
         private static Regex REGEX_BLENDERVERSION = new Regex("Blender[0-9]\\.[0-9]*\\/");
-        private static Regex REGEX_BLENDERSUBVERSION = new Regex("(blender-[0-9]\\.[0-9][0-9]?\\.[0-9])-(.*?)\\.(.*)");
+        private static Regex REGEX_BLENDERSUBVERSION = new Regex("(blender-[0-9]+\\.[0-9]+\\.[0-9]+)-(.*?)\\.(.*)");
 
         private static int CACHE_DAYS = 3;
 
@@ -46,6 +46,72 @@ namespace LogicReinc.BlendFarm.Shared
         public static BlenderVersion FindVersion(string version, string cacheFile = null, string customFile = null)
         {
             return GetBlenderVersions(cacheFile, customFile).FirstOrDefault(x => x.Name == version);
+        }
+
+        private static readonly Regex REGEX_INSTALLED = new Regex("^(blender-.+?)-(windows64|windows-x64|linux64|linux-x64|macOS|macos-x64|macos-arm64)$", RegexOptions.IgnoreCase);
+
+        /// <summary>
+        /// Names of the versions installed in a BlenderData directory, newest first
+        /// </summary>
+        public static List<string> GetInstalledVersions(string blenderDataPath)
+        {
+            List<string> names = new List<string>();
+            try
+            {
+                if (!string.IsNullOrEmpty(blenderDataPath) && Directory.Exists(blenderDataPath))
+                    foreach (string dir in Directory.GetDirectories(blenderDataPath))
+                    {
+                        Match match = REGEX_INSTALLED.Match(Path.GetFileName(dir));
+                        if (match.Success && !names.Contains(match.Groups[1].Value))
+                            names.Add(match.Groups[1].Value);
+                    }
+            }
+            catch { }
+            return names.OrderByDescending(x => x, Comparer<string>.Create(CompareNames)).ToList();
+        }
+
+        /// <summary>
+        /// Versions known without asking the internet: the cache plus the custom ones
+        /// </summary>
+        public static List<BlenderVersion> GetOfflineBlenderVersions(string cacheFile = null, string customFile = null)
+        {
+            Cache cache = Cache.GetCache(cacheFile);
+            return GetCustomBlenderVersions(customFile).Concat(cache?.Versions ?? new List<BlenderVersion>()).ToList();
+        }
+
+        /// <summary>
+        /// Orders version names by their numbers, so 4.5.10 comes after 4.5.4
+        /// </summary>
+        public static int CompareNames(string a, string b)
+        {
+            int[] numbersA = NumbersIn(a);
+            int[] numbersB = NumbersIn(b);
+            for (int i = 0; i < Math.Max(numbersA.Length, numbersB.Length); i++)
+            {
+                int x = i < numbersA.Length ? numbersA[i] : 0;
+                int y = i < numbersB.Length ? numbersB[i] : 0;
+                if (x != y)
+                    return x.CompareTo(y);
+            }
+            return string.Compare(a, b, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static int[] NumbersIn(string name)
+        {
+            return Regex.Matches(name ?? "", "[0-9]+").Cast<Match>().Select(x => int.TryParse(x.Value, out int value) ? value : 0).ToArray();
+        }
+
+        private static bool IsInternetReachable()
+        {
+            try
+            {
+                using (System.Net.Sockets.TcpClient client = new System.Net.Sockets.TcpClient())
+                    return client.ConnectAsync(new Uri(VERSIONS_URL).Host, 443).Wait(1500) && client.Connected;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         public static List<BlenderVersion> GetCustomBlenderVersions(string customFile = null)
@@ -86,8 +152,12 @@ namespace LogicReinc.BlendFarm.Shared
             Cache cache = Cache.GetCache(cacheFile);
             if (cache != null)
                 //Refresh every >= CACHE_DAYS days
-                if (Math.Abs(cache.Date.DayOfYear - DateTime.Now.DayOfYear) < CACHE_DAYS)
+                if ((DateTime.Now - cache.Date).TotalDays < CACHE_DAYS)
                     return custom.Concat(cache.Versions).ToList();
+            //Offline there is nothing to wait for, requests would only time out one by one
+            if (!IsInternetReachable())
+                return custom.Concat(cache?.Versions ?? new List<BlenderVersion>()).ToList();
+
             try
             {
                 List<BlenderVersion> versions = new List<BlenderVersion>();

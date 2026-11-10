@@ -32,7 +32,8 @@ namespace LogicReinc.BlendFarm.Server
 
         private List<string> sessions = new List<string>();
 
-        private bool _isRendering = false;
+        private string _queueLabel = null;
+        private bool _lastQueueEmpty = false;
         private bool _isInterceptingConsole = false;
 
 
@@ -68,11 +69,8 @@ namespace LogicReinc.BlendFarm.Server
             //SessionData.CleanUp(sessions.ToArray());
             _ = SessionData.CleanUpDelayed(10000, sessions.ToArray());
             OnDisconnect?.Invoke(this);
-            if (_isRendering)
-            {
-                _blender.Cancel();
-                _isRendering = false;
-            }
+            //Only touches this client's own waiting and running renders
+            _blender.Queue.Cancel(this, false, _blender.Cancel);
         }
 
         private void EnsureAuthenticated()
@@ -403,6 +401,104 @@ namespace LogicReinc.BlendFarm.Server
         }
 
         /// <summary>
+        /// Name shown to the other clients waiting behind this one
+        /// </summary>
+        private string QueueLabel
+        {
+            get
+            {
+                if (_queueLabel == null)
+                {
+                    try
+                    {
+                        System.Net.IPAddress address = ((System.Net.IPEndPoint)Client.Client.RemoteEndPoint).Address;
+                        _queueLabel = address.ToString();
+                        //Best effort, a name is easier to recognize than an address
+                        Task<System.Net.IPHostEntry> lookup = System.Net.Dns.GetHostEntryAsync(address);
+                        if (lookup.Wait(1500) && !string.IsNullOrEmpty(lookup.Result?.HostName))
+                            _queueLabel = $"{lookup.Result.HostName.Split('.')[0]} ({_queueLabel})";
+                    }
+                    catch { _queueLabel = _queueLabel ?? "unknown"; }
+                }
+                return _queueLabel;
+            }
+        }
+
+        /// <summary>
+        /// Waits for this client's turn to render, telling it where it stands in the meantime.
+        /// Dispose the result when the render is done.
+        /// </summary>
+        private RenderQueue.Slot EnterRenderQueue(string sessionId)
+        {
+            RenderQueue.Slot slot = _blender.Queue.Enter(sessionId, this, QueueLabel, (message) =>
+                SendPacket(new ActivityRequest() { Activity = message, Progress = -1 }));
+            if (slot.Waited)
+                SendPacket(new ActivityRequest() { Activity = "Render Loading..", Progress = -1 });
+            return slot;
+        }
+
+        /// <summary>
+        /// Tells this client who is rendering and where it stands in line.
+        /// Skipped while the queue stays empty, otherwise sent every call as the elapsed times keep ticking.
+        /// </summary>
+        public void PushQueueStatus()
+        {
+            if (!IsAuthenticated)
+                return;
+
+            var snapshot = _blender.Queue.GetSnapshot(this);
+            if (snapshot.Count == 0 && _lastQueueEmpty)
+                return;
+            _lastQueueEmpty = snapshot.Count == 0;
+
+            QueueStatusResponse status = new QueueStatusResponse();
+            int waiting = 0;
+            foreach (var entry in snapshot)
+            {
+                if (!entry.IsRunning)
+                    waiting++;
+                status.Entries.Add(new QueueEntryModel()
+                {
+                    Id = entry.Id,
+                    Label = entry.Label ?? "",
+                    IsRunning = entry.IsRunning,
+                    IsYou = entry.IsYou,
+                    Promoted = entry.Promoted,
+                    ElapsedSeconds = (int)entry.Elapsed.TotalSeconds
+                });
+                if (entry.IsYou && status.YourPosition < 0)
+                    status.YourPosition = entry.IsRunning ? 0 : waiting;
+            }
+            SendPacket(status);
+        }
+
+        /// <summary>
+        /// Handler blenderVersions, tells which Blender versions this server has or can download.
+        /// Never goes to the internet, so clients get an answer right away.
+        /// </summary>
+        [BlendFarmHeader("blenderVersions")]
+        public BlenderVersionsResponse Packet_BlenderVersions(BlenderVersionsRequest req)
+        {
+            EnsureAuthenticated();
+            BlenderVersionsResponse resp = new BlenderVersionsResponse();
+            resp.Installed = _blender.GetInstalledVersionNames();
+            try
+            {
+                resp.Others = BlenderVersion.GetOfflineBlenderVersions(SystemInfo.RelativeToApplicationDirectory("VersionCache"), SystemInfo.RelativeToApplicationDirectory("VersionCustom"))
+                    .Select(x => x.Name)
+                    .Where(x => !resp.Installed.Contains(x))
+                    .Distinct()
+                    .OrderByDescending(x => x, Comparer<string>.Create(BlenderVersion.CompareNames))
+                    .ToList();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("Failed to list known versions due to: " + ex.Message);
+            }
+            return resp;
+        }
+
+        /// <summary>
         /// Handler isBusy, Checks if RenderNode is busy
         /// </summary>
         [BlendFarmHeader("isBusy")]
@@ -422,7 +518,7 @@ namespace LogicReinc.BlendFarm.Server
         public PrepareResponse Packet_Prepare(PrepareRequest req)
         {
             EnsureAuthenticated();
-            if (!_blender.TryPrepare(req.Version, (activity, progress) =>
+            if (!_blender.TryPrepare(req.Version, out string error, (activity, progress) =>
             {
                 SendPacket(new ActivityRequest()
                 {
@@ -432,7 +528,7 @@ namespace LogicReinc.BlendFarm.Server
             }))
                 return new PrepareResponse()
                 {
-                    Message = $"Failed to prepare version {req.Version}",
+                    Message = string.IsNullOrEmpty(error) ? $"Failed to prepare version {req.Version}" : error,
                     Success = false
                 };
 
@@ -455,7 +551,6 @@ namespace LogicReinc.BlendFarm.Server
 
             try
             {
-                _isRendering = true;
                 //Validate Settings
                 string filePath = SessionData.GetFilePath(req.SessionID);
                 if (filePath == null)
@@ -494,7 +589,6 @@ namespace LogicReinc.BlendFarm.Server
 
             try
             {
-                _isRendering = true;
                 //Validate Settings
                 string filePath = SessionData.GetFilePath(req.SessionID);
                 if (filePath == null)
@@ -504,6 +598,9 @@ namespace LogicReinc.BlendFarm.Server
                         Success = false,
                         Message = "Blend file was not available"
                     };
+
+                //Wait for our turn, other clients may be rendering
+                using RenderQueue.Slot slot = EnterRenderQueue(req.SessionID);
 
                 for (int i = 0; i < req.Settings.Count; i++)
                 {
@@ -624,12 +721,7 @@ namespace LogicReinc.BlendFarm.Server
                     Success = false,
                     Message = "Exception:" + ex.Message
                 };
-            }
-            finally
-            {
-                _isRendering = false;
-            }
-        }
+            }        }
 
         /// <summary>
         /// Handler render, Render a single request
@@ -648,7 +740,6 @@ namespace LogicReinc.BlendFarm.Server
 
             try
             {
-                _isRendering = true;
                 //Validate Settings
                 string filePath = SessionData.GetFilePath(req.SessionID);
                 if (filePath == null)
@@ -658,6 +749,9 @@ namespace LogicReinc.BlendFarm.Server
                         Success = false,
                         Message = "Blend file was not available"
                     };
+
+                //Wait for our turn, other clients may be rendering
+                using RenderQueue.Slot slot = EnterRenderQueue(req.SessionID);
 
                 if (req.Settings == null)
                     req.Settings = new Shared.RenderPacketModel();
@@ -741,12 +835,7 @@ namespace LogicReinc.BlendFarm.Server
                     Success = false,
                     Message = "Exception:" + ex.Message
                 };
-            }
-            finally
-            {
-                _isRendering = false;
-            }
-        }
+            }        }
 
         /// <summary>
         /// Handler cancelRender, Cancels an ongoing render
@@ -755,8 +844,8 @@ namespace LogicReinc.BlendFarm.Server
         public void Packet_Cancel_Render(CancelRenderRequest req)
         {
             EnsureAuthenticated();
-            _blender.Cancel();
-            _isRendering = false;
+            //Cancels this client's own render or queued requests, never another client's
+            _blender.Queue.Cancel(this, true, _blender.Cancel);
         }
         #endregion
 
